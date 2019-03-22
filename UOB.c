@@ -1,16 +1,13 @@
 #include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
+#include <stdlib.h>  // free,
+#include <unistd.h>  //getcwd ,
 #include <fcntl.h>
-#include <string.h>
 #include <signal.h>
 #include <pwd.h>
 #include <glob.h>
-#include <sys/wait.h>
-#include <sys/types.h>
-#include <sys/stat.h>
+#include <sys/wait.h> // waitpid,WNOHANG,WUNTRACED,WCONTINUED
 #include <readline/readline.h>
-#include <readline/history.h>
+#include <readline/history.h>  // add_history
 
 
 #define NR_JOBS 20
@@ -27,11 +24,7 @@
 #define COMMAND_EXIT 1
 #define COMMAND_CD 2
 #define COMMAND_JOBS 3
-#define COMMAND_FG 4
-#define COMMAND_BG 5
 #define COMMAND_KILL 6
-#define COMMAND_EXPORT 7
-#define COMMAND_UNSET 8
 #define COMMAND_HELP 9
 #define COMMAND_CTRL_C 10
 
@@ -40,10 +33,6 @@
 #define STATUS_SUSPENDED 2
 #define STATUS_CONTINUED 3
 #define STATUS_TERMINATED 4
-
-#define PROC_FILTER_ALL 0
-#define PROC_FILTER_DONE 1
-#define PROC_FILTER_REMAINING 2
 
 #define COLOR_NONE "\033[m"
 #define COLOR_RED "\033[1;37;41m"
@@ -60,6 +49,8 @@ const char* STATUS_STRING[] = {
     "terminated"
 };
 
+
+// define list of process to store all process
 struct process {
     char *command;
     int argc;
@@ -72,6 +63,13 @@ struct process {
     struct process *next;
 };
 
+
+// class job contains
+// job id num
+// root process
+// command text
+// process id
+// and mode
 struct job {
     int id;
     struct process *root;
@@ -80,6 +78,7 @@ struct job {
     int mode;
 };
 
+// we use this to store shell information
 struct shell_info {
     char cur_user[TOKEN_BUFSIZE];
     char cur_dir[PATH_BUFSIZE];
@@ -106,6 +105,8 @@ int get_job_id_by_pid(int pid) {
     return -1;
 }
 
+
+// get job by id it's will return an object of job
 struct job* get_job_by_id(int id) {
     if (id > NR_JOBS) {
         return NULL;
@@ -114,6 +115,7 @@ struct job* get_job_by_id(int id) {
     return shell->jobs[id];
 }
 
+// get process id by job id
 int get_pgid_by_job_id(int id) {
     struct job *job = get_job_by_id(id);
 
@@ -124,7 +126,9 @@ int get_pgid_by_job_id(int id) {
     return job->pgid;
 }
 
-int get_proc_count(int id, int filter) {
+// this will return number of count of process
+// for each process not done
+int get_proc_count(int id) {
     if (id > NR_JOBS || shell->jobs[id] == NULL) {
         return -1;
     }
@@ -132,9 +136,7 @@ int get_proc_count(int id, int filter) {
     int count = 0;
     struct process *proc;
     for (proc = shell->jobs[id]->root; proc != NULL; proc = proc->next) {
-        if (filter == PROC_FILTER_ALL ||
-            (filter == PROC_FILTER_DONE && proc->status == STATUS_DONE) ||
-            (filter == PROC_FILTER_REMAINING && proc->status != STATUS_DONE)) {
+        if ( proc->status != STATUS_DONE) {
             count++;
         }
     }
@@ -154,6 +156,8 @@ int get_next_job_id() {
     return -1;
 }
 
+
+
 int print_processes_of_job(int id) {
     if (id > NR_JOBS || shell->jobs[id] == NULL) {
         return -1;
@@ -169,7 +173,11 @@ int print_processes_of_job(int id) {
 
     return 0;
 }
-
+// to print all bg jobs
+//example
+//----------------------------
+//NUM     PID 	STATUS	CMD
+//[1]	13387	running	sleep 100
 int print_job_status(int id) {
     if (id > NR_JOBS || shell->jobs[id] == NULL) {
         return -1;
@@ -214,6 +222,8 @@ int release_job(int id) {
     return 0;
 }
 
+
+// insert new job to list of jobs
 int insert_job(struct job *job) {
     int id = get_next_job_id();
 
@@ -225,7 +235,7 @@ int insert_job(struct job *job) {
     shell->jobs[id] = job;
     return id;
 }
-
+// remove existing job from the list
 int remove_job(int id) {
     if (id > NR_JOBS || shell->jobs[id] == NULL) {
         return -1;
@@ -236,7 +246,8 @@ int remove_job(int id) {
 
     return 0;
 }
-
+// a func  will return 1 if job is not complete & 0 if it's complete or doesn't exist
+// using job id number
 int is_job_completed(int id) {
     if (id > NR_JOBS || shell->jobs[id] == NULL) {
         return 0;
@@ -252,6 +263,12 @@ int is_job_completed(int id) {
     return 1;
 }
 
+//this func will set a status to job by it's id
+// STATUS_RUNNING 0
+// STATUS_DONE 1
+// STATUS_SUSPENDED 2
+// STATUS_CONTINUED 3
+// STATUS_TERMINATED 4
 int set_process_status(int pid, int status) {
     int i;
     struct process *proc;
@@ -270,7 +287,7 @@ int set_process_status(int pid, int status) {
 
     return -1;
 }
-
+// change job status
 int set_job_status(int id, int status) {
     if (id > NR_JOBS || shell->jobs[id] == NULL) {
         return -1;
@@ -288,28 +305,13 @@ int set_job_status(int id, int status) {
     return 0;
 }
 
-int wait_for_pid(int pid) {
-    int status = 0;
-
-    waitpid(pid, &status, WUNTRACED);
-    if (WIFEXITED(status)) {
-        set_process_status(pid, STATUS_DONE);
-    } else if (WIFSIGNALED(status)) {
-        set_process_status(pid, STATUS_TERMINATED);
-    } else if (WSTOPSIG(status)) {
-        status = -1;
-        set_process_status(pid, STATUS_SUSPENDED);
-    }
-
-    return status;
-}
 
 int wait_for_job(int id) {
     if (id > NR_JOBS || shell->jobs[id] == NULL) {
         return -1;
     }
 
-    int proc_count = get_proc_count(id, PROC_FILTER_REMAINING);
+    int proc_count = get_proc_count(id);
     int wait_pid = -1, wait_count = 0;
     int status = 0;
 
@@ -340,17 +342,9 @@ int get_command_type(char *command) {
         return COMMAND_CD;
     } else if (strcmp(command, "jobs") == 0) {
         return COMMAND_JOBS;
-    } else if (strcmp(command, "fg") == 0) {
-        return COMMAND_FG;
-    } else if (strcmp(command, "bg") == 0) {
-        return COMMAND_BG;
-    } else if (strcmp(command, "kill") == 0) {
+    }else if (strcmp(command, "kill") == 0) {
         return COMMAND_KILL;
-    } else if (strcmp(command, "export") == 0) {
-        return COMMAND_EXPORT;
-    } else if (strcmp(command, "unset") == 0) {
-        return COMMAND_UNSET;
-    } else if (strcmp(command, "help") == 0) {
+    }else if (strcmp(command, "help") == 0) {
         return COMMAND_HELP;
     }else if (strcmp(command, "^C") == 0 || strcmp(command, "^c") == 0) {
         return COMMAND_CTRL_C;
@@ -377,6 +371,7 @@ void uob_update_cwd_info() {
     getcwd(shell->cur_dir, sizeof(shell->cur_dir));
 }
 
+//change direc
 int uob_cd(int argc, char** argv) {
     if (argc == 1) {
         chdir(shell->pw_dir);
@@ -408,83 +403,10 @@ int uob_jobs(int argc, char **argv) {
     return 0;
 }
 
-int uob_fg(int argc, char **argv) {
-    if (argc < 2) {
-        printf("usage: fg <pid>\n");
-        return -1;
-    }
-
-    int status;
-    pid_t pid;
-    int job_id = -1;
-
-    if (argv[1][0] == '%') {
-        job_id = atoi(argv[1] + 1);
-        pid = get_pgid_by_job_id(job_id);
-        if (pid < 0) {
-            printf("uob: fg %s: no such job\n", argv[1]);
-            return -1;
-        }
-    } else {
-        pid = atoi(argv[1]);
-    }
-
-    if (kill(-pid, SIGCONT) < 0) {
-        printf("uob: fg %d: job not found\n", pid);
-        return -1;
-    }
-
-    tcsetpgrp(0, pid);
-
-    if (job_id > 0) {
-        set_job_status(job_id, STATUS_CONTINUED);
-        print_job_status(job_id);
-        if (wait_for_job(job_id) >= 0) {
-            remove_job(job_id);
-        }
-    } else {
-        wait_for_pid(pid);
-    }
-
-    signal(SIGTTOU, SIG_IGN);
-    tcsetpgrp(0, getpid());
-    signal(SIGTTOU, SIG_DFL);
-
-    return 0;
-}
-
-int uob_bg(int argc, char **argv) {
-    if (argc < 2) {
-        printf("usage: bg <pid>\n");
-        return -1;
-    }
-
-    pid_t pid;
-    int job_id = -1;
-
-    if (argv[1][0] == '%') {
-        job_id = atoi(argv[1] + 1);
-        pid = get_pgid_by_job_id(job_id);
-        if (pid < 0) {
-            printf("uob: bg %s: no such job\n", argv[1]);
-            return -1;
-        }
-    } else {
-        pid = atoi(argv[1]);
-    }
-
-    if (kill(-pid, SIGCONT) < 0) {
-        printf("uob: bg %d: job not found\n", pid);
-        return -1;
-    }
-
-    if (job_id > 0) {
-        set_job_status(job_id, STATUS_CONTINUED);
-        print_job_status(job_id);
-    }
-
-    return 0;
-}
+// killing jobs
+//example
+//kill 1
+//kill 2 4
 
 int uob_kill(int argc, char **argv) {
     if (argc < 2) {
@@ -522,37 +444,24 @@ int uob_kill(int argc, char **argv) {
 	
     
 }
-
-int uob_export(int argc, char **argv) {
-    if (argc < 2) {
-        printf("usage: export KEY=VALUE\n");
-        return -1;
-    }
-
-    return putenv(argv[1]);
-}
-
-int uob_unset(int argc, char **argv) {
-    if (argc < 2) {
-        printf("usage: unset KEY\n");
-        return -1;
-    }
-
-    return unsetenv(argv[1]);
-}
-
+// exit without errors
 int uob_exit() {
     printf("bye!\n");
     exit(0);
 }
 
+
+//this function well check process status if it's done well print a message
+// for example  when i lunch new job like sleep 10  and i pressed ^z  the process state 'll change to suspended and it well print a message
 void check_zombie() {
     int status, pid;
     while ((pid = waitpid(-1, &status, WNOHANG|WUNTRACED|WCONTINUED)) > 0) {
         if (WIFEXITED(status)) {
             set_process_status(pid, STATUS_DONE);
+
         } else if (WIFSTOPPED(status)) {
             set_process_status(pid, STATUS_SUSPENDED);
+
         } else if (WIFCONTINUED(status)) {
             set_process_status(pid, STATUS_CONTINUED);
         }
@@ -565,9 +474,7 @@ void check_zombie() {
     }
 }
 
-void sigint_handler(int signal) {
-    printf("\n");
-}
+
 // Help command builtin
 void openHelp()
 {
@@ -582,6 +489,8 @@ void openHelp()
         "\n>improper space handling\n");
  
 }
+
+// execute command by type
 int uob_execute_builtin_command(struct process *proc) {
     int status = 1;
 
@@ -595,20 +504,8 @@ int uob_execute_builtin_command(struct process *proc) {
         case COMMAND_JOBS:
             uob_jobs(proc->argc, proc->argv);
             break;
-        case COMMAND_FG:
-            uob_fg(proc->argc, proc->argv);
-            break;
-        case COMMAND_BG:
-            uob_bg(proc->argc, proc->argv);
-            break;
         case COMMAND_KILL:
             uob_kill(proc->argc, proc->argv);
-            break;
-        case COMMAND_EXPORT:
-            uob_export(proc->argc, proc->argv);
-            break;
-        case COMMAND_UNSET:
-            uob_unset(proc->argc, proc->argv);
             break;
         case COMMAND_HELP:
         		openHelp();
@@ -690,10 +587,11 @@ int uob_launch_process(struct job *job, struct process *proc, int in_fd, int out
     return status;
 }
 
+//start new job
 int uob_launch_job(struct job *job) {
+
     struct process *proc;
     int status = 0, in_fd = 0, fd[2], job_id = -1;
-
     check_zombie();
     if (job->root->type == COMMAND_EXTERNAL) {
         job_id = insert_job(job);
@@ -882,67 +780,15 @@ struct job* uob_parse_command(char *line) {
     return new_job;
 }
 
-char* uob_read_line() {
-    int bufsize = COMMAND_BUFSIZE;
-    int position = 0;
-    char *buffer = malloc(sizeof(char) * bufsize);
-    int c;
-
-    if (!buffer) {
-        fprintf(stderr, "uob: allocation error\n");
-        exit(EXIT_FAILURE);
-    }
-
-    while (1) {
-        c = getchar();
-
-        if (c == EOF || c == '\n') {
-            buffer[position] = '\0';
-            return buffer;
-        } else {
-            buffer[position] = c;
-        }
-        position++;
-
-        if (position >= bufsize) {
-            bufsize += COMMAND_BUFSIZE;
-            buffer = realloc(buffer, bufsize);
-            if (!buffer) {
-                fprintf(stderr, "uob: allocation error\n");
-                exit(EXIT_FAILURE);
-            }
-        }
-    }
-}
-
+// looks like PS1 in bash :P
 void uob_print_promt() {
     printf(COLOR_CYAN "%s" COLOR_NONE "@" COLOR_YELLOW "%s" COLOR_NONE ":%s", shell->cur_user, shell->cur_dir,COLOR_RED "UOB#" COLOR_NONE " ");
-   // printf(COLOR_RED "UOB#" COLOR_NONE " ");
 }
 
 void uob_print_welcome() {
-    // mohab
     printf("Hi Adeeb :P\n" );
 }
 
-int takeInput(char* str)
-{
-    char* buf;
- 
-    buf = readline("");
-    if (strlen(buf) != 0) {
-    
-        
-        add_history(buf);
-        str=buf;
-        printf("%s 11\n",str );
-        strcpy(str, buf);
-        printf("%s 22\n",str );
-        return 0;
-    } else {
-        return 1;
-    }
-}
 void uob_loop() {
     char *line;
     struct job *job;
@@ -959,19 +805,16 @@ void uob_loop() {
             check_zombie();
             continue;
         }
-        
-        //	add_history (line);
-        //	free(line);
-       
-        
         job = uob_parse_command(line);
         status = uob_launch_job(job);
-        
-
         free(line);
     }
 }
 
+
+void sigint_handler(int signal) {
+    printf("\n");
+}
 void uob_init() {
     struct sigaction sigint_action = {
         .sa_handler = &sigint_handler,
@@ -1003,6 +846,8 @@ void uob_init() {
 }
 
 
+
+// UOB 'll start exec.. from here
 int main(int argc, char **argv) {
     uob_init();
     uob_print_welcome();
@@ -1010,3 +855,4 @@ int main(int argc, char **argv) {
 
     return EXIT_SUCCESS;
 }
+
