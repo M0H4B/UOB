@@ -478,7 +478,7 @@ void check_zombie() {
 // Help command builtin
 void openHelp()
 {
-    printf("\n***WELCOME TO MY SHELL HELP 'Adeeb'***"
+    printf("\n***WELCOME TO MY SHELL HELP 'xx'***"
         "\nGNU UOB, version 1.0.0"
         "\nList of Commands supported:"
         "\n>cd"
@@ -786,7 +786,7 @@ void uob_print_promt() {
 }
 
 void uob_print_welcome() {
-    printf("Hi Adeeb :P\n" );
+    printf("Hi xx :P\n" );
 }
 
 void uob_loop() {
